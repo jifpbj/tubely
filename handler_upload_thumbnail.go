@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"mime"
@@ -33,7 +35,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
 
-	// TODO: implement the upload here
 	const maxMemory int64 = 10 << 20
 
 	err = r.ParseMultipartForm(maxMemory)
@@ -59,7 +60,15 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	assetPath := getAssetPath(videoID, mediaType)
+	slice := make([]byte, 32)
+	randomID, err := rand.Read(slice)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't generate random ID", err)
+		return
+	}
+
+	pathID := base64.RawURLEncoding.EncodeToString(slice[:randomID])
+	assetPath := getAssetPath(pathID, mediaType)
 	assetDiskPath := cfg.getAssetDiskPath(assetPath)
 
 	dst, err := os.Create(assetDiskPath)
