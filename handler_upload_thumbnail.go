@@ -61,13 +61,13 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 
 	slice := make([]byte, 32)
-	randomID, err := rand.Read(slice)
+	_, err = rand.Read(slice)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't generate random ID", err)
 		return
 	}
 
-	pathID := base64.RawURLEncoding.EncodeToString(slice[:randomID])
+	pathID := base64.RawURLEncoding.EncodeToString(slice)
 	assetPath := getAssetPath(pathID, mediaType)
 	assetDiskPath := cfg.getAssetDiskPath(assetPath)
 
