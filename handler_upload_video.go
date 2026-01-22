@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -17,10 +21,10 @@ import (
 )
 
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
-	http.MaxBytesReader(w, r.Body, 0<<30)
+	const uploadLimit = 1 << 30
+	r.Body = http.MaxBytesReader(w, r.Body, uploadLimit)
 
 	videoIDString := r.PathValue("videoID")
-
 	videoID, err := uuid.Parse(videoIDString)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Invalid ID", err)
@@ -47,7 +51,9 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	if video.UserID != userID {
 		respondWithError(w, http.StatusUnauthorized, "You don't have permission to upload video for this video ID", nil)
+		return
 	}
+
 	file, fileHeader, err := r.FormFile("video")
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "Couldn't get image data from form", err)
@@ -57,12 +63,12 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	mediaType, _, err := mime.ParseMediaType(fileHeader.Header.Get("Content-Type"))
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Invalid Content-Type for thumbnail", err)
+		respondWithError(w, http.StatusBadRequest, "Invalid Content-Type for video", err)
 		return
 	}
 
 	if mediaType != "video/mp4" {
-		respondWithError(w, http.StatusBadRequest, "Unsupported thumbnail media type", nil)
+		respondWithError(w, http.StatusBadRequest, "Unsupported video media type", nil)
 		return
 	}
 
@@ -74,7 +80,10 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
 	io.Copy(tempFile, file)
-
+	if _, err := io.Copy(tempFile, file); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't write to temp file", err)
+		return
+	}
 	tempFile.Seek(0, io.SeekStart)
 
 	slice := make([]byte, 32)
@@ -84,8 +93,24 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	aspect, err := cfg.getVideoAspectRatio(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't get video aspect ratio", err)
+		return
+	}
+
+	var prefix string
+	switch aspect {
+	case "16:9":
+		prefix = "landscape/"
+	case "9:16":
+		prefix = "portrait/"
+	default:
+		prefix = "other/"
+	}
+
 	pathID := hex.EncodeToString(slice)
-	key := pathID + mediaType
+	key := prefix + pathID + ".mp4"
 
 	log.Printf("Uploading to bucket=%q, key=%q", cfg.s3Bucket, key)
 
@@ -110,5 +135,62 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video with URL", err)
 		return
+	}
+
+	respondWithJSON(w, http.StatusOK, video)
+}
+
+// aspect ratio helper
+type FFProbeOutput struct {
+	Streams []struct {
+		Width  int `json:"width"`
+		Height int `json:"height"`
+	} `json:"streams"`
+}
+
+func (cfg *apiConfig) getVideoAspectRatio(filePath string) (string, error) {
+	log.Println("ffprobe starting with filepath:", filePath)
+
+	command := exec.Command(
+		"ffprobe",
+		"-v", "error", "-show_streams", "-of", "json",
+		filePath)
+
+	var stdout bytes.Buffer
+	command.Stdout = &stdout
+
+	err := command.Run()
+	if err != nil {
+		return "", err
+	}
+
+	var ffprobeOutput FFProbeOutput
+
+	err = json.Unmarshal(stdout.Bytes(), &ffprobeOutput)
+	if err != nil {
+		log.Println("json unmarshal error:", err)
+		return "", err
+	}
+
+	if len(ffprobeOutput.Streams) == 0 {
+		log.Println("no streams found in ffprobe output")
+		return "", fmt.Errorf("no streams found in ffprobe output")
+	}
+
+	width := ffprobeOutput.Streams[0].Width
+	height := ffprobeOutput.Streams[0].Height
+
+	ratio := float64(width) / float64(height)
+
+	landscape := 16.0 / 9.0
+	portrait := 9.0 / 16.0
+	tolerance := 0.05
+
+	if math.Abs(ratio-landscape) <= tolerance {
+		return "16:9", nil
+	} else if math.Abs(ratio-portrait) <= tolerance {
+		return "9:16", nil
+	} else {
+		return "other", nil
 	}
 }
