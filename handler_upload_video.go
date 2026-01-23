@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -77,9 +79,10 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "Couldn't create temp file", err)
 		return
 	}
+
 	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
-	io.Copy(tempFile, file)
+
 	if _, err := io.Copy(tempFile, file); err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't write to temp file", err)
 		return
@@ -109,6 +112,20 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		prefix = "other/"
 	}
 
+	processedFilePath, err := processVideoForFastStart(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't process video for fast start", err)
+		return
+	}
+
+	processedFile, err := os.Open(processedFilePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't open processed video file", err)
+		return
+	}
+
+	defer processedFile.Close()
+
 	pathID := hex.EncodeToString(slice)
 	key := prefix + pathID + ".mp4"
 
@@ -119,7 +136,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		&s3.PutObjectInput{
 			Bucket:      aws.String(cfg.s3Bucket),
 			Key:         aws.String(key),
-			Body:        tempFile,
+			Body:        processedFile,
 			ContentType: aws.String(mediaType),
 		},
 	)
@@ -140,7 +157,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	respondWithJSON(w, http.StatusOK, video)
 }
 
-// aspect ratio helper
+// FFProbeOutput aspect ratio helper
 type FFProbeOutput struct {
 	Streams []struct {
 		Width  int `json:"width"`
@@ -193,4 +210,39 @@ func (cfg *apiConfig) getVideoAspectRatio(filePath string) (string, error) {
 	} else {
 		return "other", nil
 	}
+}
+
+func processVideoForFastStart(filePath string) (string, error) {
+	ext := filepath.Ext(filePath)                // ".mp4"
+	base := strings.TrimSuffix(filePath, ext)    // "/tmp/tubely-upload"
+	outputFilePath := base + ".processing" + ext // "/tmp/tubely-upload.processing.mp4"
+	command := exec.Command(
+		"ffmpeg",
+		"-i",
+		filePath,
+		"-c",
+		"copy",
+		"-movflags",
+		"faststart",
+		"-f",
+		"mp4",
+		outputFilePath)
+
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+
+	err := command.Run()
+	if err != nil {
+		return "", fmt.Errorf("ffmpeg error: %v, %s", err, stderr.String())
+	}
+
+	info, err := os.Stat(outputFilePath)
+	if err != nil {
+		return "", fmt.Errorf("processed file not found: %v", err)
+	}
+	if info.Size() == 0 {
+		return "", fmt.Errorf("processed file is empty")
+	}
+
+	return outputFilePath, nil
 }
