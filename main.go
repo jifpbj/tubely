@@ -81,7 +81,7 @@ func main() {
 	if s3CfDistribution == "" {
 		log.Fatal("S3_CF_DISTRO environment variable is not set")
 	}
-
+	log.Printf("S3 CloudFront distribution: %q", s3CfDistribution)
 	port := os.Getenv("PORT")
 	if port == "" {
 		log.Fatal("PORT environment variable is not set")
