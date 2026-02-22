@@ -1,6 +1,8 @@
 # (Tubely)
 
 This repo contains the starter code for the Tubely application - the #1 tool for engagement bait - for the "Learn File Servers and CDNs with S3 and CloudFront" [course](https://www.boot.dev/courses/learn-file-servers-s3-cloudfront-golang) on [boot.dev](https://www.boot.dev)
+## Motivation
+This is to be used as a youtube clone
 
 ## Quickstart
 
@@ -59,7 +61,8 @@ You'll need to update values in the `.env` file to match your configuration, but
 ```bash
 go run .
 ```
-
+##Usage
 - You should see a new database file `tubely.db` created in the root directory.
 - You should see a new `assets` directory created in the root directory, this is where the images will be stored.
 - You should see a link in your console to open the local web page.
+##Contributing
