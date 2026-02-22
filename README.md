@@ -4,7 +4,7 @@ This repo contains the starter code for the Tubely application - the #1 tool for
 ## Motivation
 This is to be used as a youtube clone
 
-## Quickstart
+## Quick Start
 
 *This is to be used as a *reference\* in case you need it, you should follow the instructions in the course rather than trying to do everything here.
 
